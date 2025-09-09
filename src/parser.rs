@@ -1,7 +1,8 @@
-use std::collections::VecDeque;
 use std::fmt;
 
 use crate::lexer::{Token, TokenStream};
+
+type ParseResult<'a> = Result<Expression<'a>, ParseError<'a>>;
 
 #[derive(Debug, PartialEq)]
 pub enum Expression<'a> {
@@ -53,30 +54,25 @@ impl fmt::Display for ParseError<'_> {
 
 impl std::error::Error for ParseError<'_> {}
 
-pub fn parse<'a>(input: &'a str) -> Result<Expression<'a>, ParseError<'a>> {
-    let mut tokens = TokenStream::new(input).collect();
-    let ast = parse_tokens(&mut tokens)?;
-    if let Some(token) = tokens.pop_front() {
-        Err(ParseError::UnexpectedToken(token))
-    } else {
-        Ok(ast)
+pub fn parse(input: &str) -> ParseResult<'_> {
+    let mut tokens = TokenStream::new(input);
+    match tokens.next() {
+        Some(Token::OpenParen) => {
+            let ast = parse_ast(&mut tokens)?;
+            match tokens.next() {
+                Some(token) => Err(ParseError::UnexpectedToken(token)),
+                None => Ok(ast),
+            }
+        }
+        Some(token) => Err(ParseError::UnexpectedToken(token)),
+        None => Err(ParseError::EndOfInput),
     }
 }
 
-pub fn parse_tokens<'a>(
-    tokens: &mut VecDeque<Token<'a>>,
-) -> Result<Expression<'a>, ParseError<'a>> {
-    let Some(token) = tokens.pop_front() else {
-        return Err(ParseError::EndOfInput);
-    };
-
-    let Token::OpenParen = token else {
-        return Err(ParseError::UnexpectedToken(token));
-    };
-
+fn parse_ast<'a>(tokens: &mut TokenStream<'a>) -> ParseResult<'a> {
     let mut list = Vec::new();
 
-    while let Some(token) = tokens.pop_front() {
+    while let Some(token) = tokens.next() {
         match token {
             Token::Bool(b) => list.push(Expression::Bool(b)),
             Token::Number(n) => list.push(Expression::Number(n)),
@@ -85,8 +81,8 @@ pub fn parse_tokens<'a>(
             Token::StringLiteral(_) => return Err(ParseError::UnexpectedToken(token)),
             Token::DoubleQuote => {
                 // Remove double quotes from the token stream when parsing.
-                let literal = match tokens.pop_front() {
-                    Some(Token::StringLiteral(s)) => match tokens.pop_front() {
+                let literal = match tokens.next() {
+                    Some(Token::StringLiteral(s)) => match tokens.next() {
                         Some(Token::DoubleQuote) => s,
                         Some(token) => return Err(ParseError::UnexpectedToken(token)),
                         None => break,
@@ -98,10 +94,7 @@ pub fn parse_tokens<'a>(
                 };
                 list.push(Expression::StringLiteral(literal));
             }
-            Token::OpenParen => {
-                tokens.push_front(Token::OpenParen);
-                list.push(parse_tokens(tokens)?);
-            }
+            Token::OpenParen => list.push(parse_ast(tokens)?),
             Token::CloseParen => return Ok(Expression::List(list)),
         }
     }
@@ -135,6 +128,30 @@ mod tests {
         assert_eq!(
             parse("+ 1 2)"),
             Err(ParseError::UnexpectedToken(Token::Symbol("+"))),
+        )
+    }
+
+    #[test]
+    fn nested_lists() {
+        assert_eq!(
+            parse("(+ 1 (+ 2 3))"),
+            Ok(Expression::List(vec![
+                Expression::Symbol("+"),
+                Expression::Number(1),
+                Expression::List(vec![
+                    Expression::Symbol("+"),
+                    Expression::Number(2),
+                    Expression::Number(3),
+                ])
+            ]))
+        )
+    }
+
+    #[test]
+    fn trailing_tokens() {
+        assert_eq!(
+            parse("(+ 1 2) a"),
+            Err(ParseError::UnexpectedToken(Token::Symbol("a"))),
         )
     }
 

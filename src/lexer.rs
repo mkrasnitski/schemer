@@ -1,6 +1,6 @@
 use std::fmt;
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Token<'a> {
     OpenParen,
     CloseParen,
@@ -159,6 +159,24 @@ mod tests {
                 Token::Symbol("+"),
                 Token::Number(1),
                 Token::Number(2),
+                Token::CloseParen,
+            ]
+        )
+    }
+
+    #[test]
+    fn nested_lists() {
+        assert_eq!(
+            tokenize("(+ 1 (+ 2 3))"),
+            vec![
+                Token::OpenParen,
+                Token::Symbol("+"),
+                Token::Number(1),
+                Token::OpenParen,
+                Token::Symbol("+"),
+                Token::Number(2),
+                Token::Number(3),
+                Token::CloseParen,
                 Token::CloseParen,
             ]
         )
