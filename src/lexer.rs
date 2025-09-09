@@ -13,13 +13,11 @@ pub enum Token<'a> {
 }
 
 impl<'a> Token<'a> {
-    fn new(word: &'a str, is_literal: bool) -> Option<Self> {
+    fn new(word: &'a str, is_literal: bool) -> Self {
         if is_literal {
-            Some(Token::StringLiteral(word))
-        } else if word.is_empty() {
-            None
+            Token::StringLiteral(word)
         } else {
-            Some(match word {
+            match word {
                 "(" => Token::OpenParen,
                 ")" => Token::CloseParen,
                 "\"" => Token::DoubleQuote,
@@ -34,7 +32,7 @@ impl<'a> Token<'a> {
                         Token::Symbol(word)
                     }
                 }
-            })
+            }
         }
     }
 }
@@ -74,59 +72,45 @@ impl<'a> Iterator for TokenStream<'a> {
     type Item = Token<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.string {
-            match self.input[self.start..].find('"') {
-                Some(idx) => {
-                    if idx == 0 {
-                        self.start += 1;
-                        self.string = false;
-                        Some(Token::DoubleQuote)
-                    } else {
-                        let literal = &self.input[self.start..self.start + idx];
-                        self.start += idx;
-                        Some(Token::StringLiteral(literal))
+        // If we're in "string"-mode, we don't care about other delimiters and treat
+        // everything between quotes as part of the string literal.
+        let pattern = if self.string {
+            |c: char| c == '"'
+        } else {
+            |c: char| c == '(' || c == ')' || c == '"' || c.is_whitespace()
+        };
+
+        // Consume the input incrementally by shifting `self.start` until we get to the end.
+        if let Some((idx, matched)) = self.input[self.start..].match_indices(pattern).next() {
+            if idx == 0 {
+                // If we land right on a delimiter, simply consume it.
+                self.start += matched.len();
+                // Whitespace doesn't get included in the token stream. This will only get
+                // hit when not in "string"-mode.
+                if matched.chars().all(char::is_whitespace) {
+                    self.next()
+                } else {
+                    let token = Token::new(matched, false);
+                    // If we run into a double-quote, toggle "string"-mode on/off.
+                    if let Token::DoubleQuote = token {
+                        self.string = !self.string;
                     }
+                    Some(token)
                 }
-                None => {
-                    let literal = &self.input[self.start..];
-                    self.start = self.input.len();
-                    if literal.is_empty() {
-                        None
-                    } else {
-                        Some(Token::StringLiteral(literal))
-                    }
-                }
+            } else {
+                // If the delimiter is not at index 0, consume up until the delimiter.
+                let token = Token::new(&self.input[self.start..self.start + idx], self.string);
+                self.start += idx;
+                Some(token)
             }
         } else {
-            // We split tokens on whitespace, except parentheses and double quotes which don't
-            // need to be whitespace-separated.
-            match self.input[self.start..]
-                .match_indices(|c: char| c == '(' || c == ')' || c == '"' || c.is_whitespace())
-                .next()
-            {
-                Some((idx, matched)) => {
-                    if idx == 0 {
-                        self.start += matched.len();
-                        if matched.chars().all(char::is_whitespace) {
-                            self.next()
-                        } else {
-                            let token = Token::new(matched, false);
-                            if let Some(Token::DoubleQuote) = token {
-                                self.string = true;
-                            }
-                            token
-                        }
-                    } else {
-                        let token = Token::new(&self.input[self.start..self.start + idx], false);
-                        self.start += idx;
-                        token
-                    }
-                }
-                None => {
-                    let token = Token::new(&self.input[self.start..], false);
-                    self.start = self.input.len();
-                    token
-                }
+            // If we're out of delimiters, consume the remainder of the string.
+            let word = &self.input[self.start..];
+            self.start = self.input.len();
+            if word.is_empty() {
+                None
+            } else {
+                Some(Token::new(word, self.string))
             }
         }
     }
