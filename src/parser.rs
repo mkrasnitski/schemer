@@ -1,8 +1,9 @@
 use std::fmt;
+use std::iter::Peekable;
 
 use crate::lexer::{Token, TokenStream};
 
-type ParseResult<'a> = Result<Expression<'a>, ParseError<'a>>;
+type ParseResult<'a, T> = Result<T, ParseError<'a>>;
 
 #[derive(Debug, PartialEq)]
 pub enum Expression<'a> {
@@ -54,52 +55,83 @@ impl fmt::Display for ParseError<'_> {
 
 impl std::error::Error for ParseError<'_> {}
 
-pub fn parse(input: &str) -> ParseResult<'_> {
-    let mut tokens = TokenStream::new(input);
-    match tokens.next() {
-        Some(Token::OpenParen) => {
-            let ast = parse_ast(&mut tokens)?;
-            match tokens.next() {
-                Some(token) => Err(ParseError::UnexpectedToken(token)),
-                None => Ok(ast),
-            }
-        }
-        Some(token) => Err(ParseError::UnexpectedToken(token)),
-        None => Err(ParseError::EndOfInput),
-    }
+pub struct Parser<'a> {
+    tokens: Peekable<TokenStream<'a>>,
 }
 
-fn parse_ast<'a>(tokens: &mut TokenStream<'a>) -> ParseResult<'a> {
-    let mut list = Vec::new();
+impl<'a> Parser<'a> {
+    pub fn new(input: &'a str) -> Self {
+        Self {
+            tokens: TokenStream::new(input).peekable(),
+        }
+    }
 
-    while let Some(token) = tokens.next() {
+    pub fn parse(mut self) -> ParseResult<'a, Expression<'a>> {
+        match self.tokens.next() {
+            Some(Token::OpenParen) => {
+                let list = self.parse_list()?;
+                match self.tokens.next() {
+                    Some(token) => Err(ParseError::UnexpectedToken(token)),
+                    None => Ok(Expression::List(list)),
+                }
+            }
+            Some(token) => Err(ParseError::UnexpectedToken(token)),
+            None => Err(ParseError::EndOfInput),
+        }
+    }
+
+    fn parse_list(&mut self) -> ParseResult<'a, Vec<Expression<'a>>> {
+        let mut list = Vec::new();
+
+        while let Some(token) = self.tokens.peek() {
+            match token {
+                Token::CloseParen => {
+                    self.tokens.next();
+                    return Ok(list);
+                }
+                _ => list.push(self.parse_expression()?),
+            }
+        }
+
+        Err(ParseError::EndOfInput)
+    }
+
+    fn parse_expression(&mut self) -> ParseResult<'a, Expression<'a>> {
+        let Some(token) = self.tokens.next() else {
+            return Err(ParseError::EndOfInput);
+        };
+
         match token {
-            Token::Bool(b) => list.push(Expression::Bool(b)),
-            Token::Number(n) => list.push(Expression::Number(n)),
-            Token::Decimal(d) => list.push(Expression::Decimal(d)),
-            Token::Symbol(s) => list.push(Expression::Symbol(s)),
-            Token::StringLiteral(_) => return Err(ParseError::UnexpectedToken(token)),
+            Token::Bool(b) => Ok(Expression::Bool(b)),
+            Token::Number(n) => Ok(Expression::Number(n)),
+            Token::Decimal(d) => Ok(Expression::Decimal(d)),
+            Token::Symbol(s) => Ok(Expression::Symbol(s)),
             Token::DoubleQuote => {
                 // Remove double quotes from the token stream when parsing.
-                let literal = match tokens.next() {
-                    Some(Token::StringLiteral(s)) => match tokens.next() {
+                let literal = match self.tokens.next() {
+                    Some(Token::StringLiteral(s)) => match self.tokens.next() {
                         Some(Token::DoubleQuote) => s,
                         Some(token) => return Err(ParseError::UnexpectedToken(token)),
-                        None => break,
+                        None => return Err(ParseError::EndOfInput),
                     },
                     // Turn two consecutive double-quotes into an empty string literal.
                     Some(Token::DoubleQuote) => "",
                     Some(token) => return Err(ParseError::UnexpectedToken(token)),
-                    None => break,
+                    None => return Err(ParseError::EndOfInput),
                 };
-                list.push(Expression::StringLiteral(literal));
+                Ok(Expression::StringLiteral(literal))
             }
-            Token::OpenParen => list.push(parse_ast(tokens)?),
-            Token::CloseParen => return Ok(Expression::List(list)),
+            Token::OpenParen => Ok(Expression::List(self.parse_list()?)),
+            // Closing parens need a matching open paren.
+            Token::CloseParen => return Err(ParseError::UnexpectedToken(token)),
+            // String literals are surrounded by quotes, so bare literals are invalid.
+            Token::StringLiteral(_) => return Err(ParseError::UnexpectedToken(token)),
         }
     }
+}
 
-    Err(ParseError::EndOfInput)
+pub fn parse(input: &str) -> ParseResult<'_, Expression<'_>> {
+    Parser::new(input).parse()
 }
 
 #[cfg(test)]
