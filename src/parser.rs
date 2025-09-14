@@ -12,7 +12,17 @@ pub enum Expression<'a> {
     Decimal(f64),
     StringLiteral(&'a str),
     Symbol(&'a str),
+    Define {
+        decl: Declaration<'a>,
+        body: Box<Expression<'a>>,
+    },
     List(Vec<Expression<'a>>),
+}
+
+#[derive(Debug, PartialEq)]
+pub enum Declaration<'a> {
+    Variable(&'a str),
+    Function(Vec<&'a str>),
 }
 
 impl fmt::Display for Expression<'_> {
@@ -23,6 +33,14 @@ impl fmt::Display for Expression<'_> {
             Expression::Decimal(d) => write!(f, "{d}"),
             Expression::StringLiteral(s) => write!(f, "{s:?}"),
             Expression::Symbol(s) => write!(f, "{s}"),
+            Expression::Define { decl, body } => {
+                write!(f, "define ")?;
+                match decl {
+                    Declaration::Variable(var) => write!(f, "{var}")?,
+                    Declaration::Function(args) => write!(f, "({})", args.join(" "))?,
+                }
+                write!(f, " {body}")
+            }
             Expression::List(list) => {
                 write!(
                     f,
@@ -41,6 +59,7 @@ impl fmt::Display for Expression<'_> {
 pub enum ParseError<'a> {
     EndOfInput,
     UnexpectedToken(Token<'a>),
+    InvalidDefinition,
 }
 
 impl fmt::Display for ParseError<'_> {
@@ -49,6 +68,7 @@ impl fmt::Display for ParseError<'_> {
         match self {
             ParseError::EndOfInput => write!(f, "Unexpected end of input"),
             ParseError::UnexpectedToken(token) => write!(f, "Unexpected token: {token}"),
+            ParseError::InvalidDefinition => write!(f, "Invalid definition"),
         }
     }
 }
@@ -106,6 +126,7 @@ impl<'a> Parser<'a> {
             Token::Number(n) => Ok(Expression::Number(n)),
             Token::Decimal(d) => Ok(Expression::Decimal(d)),
             Token::Symbol(s) => Ok(Expression::Symbol(s)),
+            Token::Define => self.parse_definition(),
             Token::DoubleQuote => {
                 // Remove double quotes from the token stream when parsing.
                 let literal = match self.tokens.next() {
@@ -127,6 +148,31 @@ impl<'a> Parser<'a> {
             // String literals are surrounded by quotes, so bare literals are invalid.
             Token::StringLiteral(_) => return Err(ParseError::UnexpectedToken(token)),
         }
+    }
+
+    fn parse_definition(&mut self) -> ParseResult<'a, Expression<'a>> {
+        let Some(token) = self.tokens.next() else {
+            return Err(ParseError::EndOfInput);
+        };
+
+        let decl = match token {
+            Token::Symbol(s) => Declaration::Variable(s),
+            Token::OpenParen => Declaration::Function(
+                self.parse_list()?
+                    .into_iter()
+                    .map(|e| match e {
+                        Expression::Symbol(s) => Some(s),
+                        _ => None,
+                    })
+                    .collect::<Option<Vec<_>>>()
+                    .ok_or(ParseError::InvalidDefinition)?,
+            ),
+            _ => return Err(ParseError::InvalidDefinition),
+        };
+
+        let body = Box::new(self.parse_expression()?);
+
+        Ok(Expression::Define { decl, body })
     }
 }
 
@@ -225,6 +271,43 @@ mod tests {
                 Expression::StringLiteral(""),
                 Expression::StringLiteral("a"),
             ]))
+        )
+    }
+
+    #[test]
+    fn define_var() {
+        assert_eq!(
+            parse("(define a 5)"),
+            Ok(Expression::List(vec![Expression::Define {
+                decl: Declaration::Variable("a"),
+                body: Box::new(Expression::Number(5)),
+            }]))
+        )
+    }
+
+    #[test]
+    fn define_var_paren() {
+        assert_eq!(
+            parse("(define (a) 5)"),
+            Ok(Expression::List(vec![Expression::Define {
+                decl: Declaration::Function(vec!["a"]),
+                body: Box::new(Expression::Number(5)),
+            }]))
+        )
+    }
+
+    #[test]
+    fn define_function() {
+        assert_eq!(
+            parse("(define (add1 a) (+ a 1))"),
+            Ok(Expression::List(vec![Expression::Define {
+                decl: Declaration::Function(vec!["add1", "a"]),
+                body: Box::new(Expression::List(vec![
+                    Expression::Symbol("+"),
+                    Expression::Symbol("a"),
+                    Expression::Number(1),
+                ])),
+            }]))
         )
     }
 }
