@@ -70,6 +70,7 @@ pub enum ParseError<'a> {
     EndOfInput,
     UnexpectedToken(Token<'a>),
     InvalidDefinition,
+    InvalidIf,
 }
 
 impl fmt::Display for ParseError<'_> {
@@ -79,6 +80,7 @@ impl fmt::Display for ParseError<'_> {
             ParseError::EndOfInput => write!(f, "Unexpected end of input"),
             ParseError::UnexpectedToken(token) => write!(f, "Unexpected token: {token}"),
             ParseError::InvalidDefinition => write!(f, "Invalid definition"),
+            ParseError::InvalidIf => write!(f, "Invalid if clause"),
         }
     }
 }
@@ -142,11 +144,15 @@ impl<'a> Parser<'a> {
                 let branch = Box::new(self.parse_expression()?);
                 let else_branch = Box::new(self.parse_expression()?);
 
-                Ok(Expression::If {
-                    cond,
-                    true_branch: branch,
-                    false_branch: else_branch,
-                })
+                match self.tokens.peek() {
+                    Some(Token::CloseParen) => Ok(Expression::If {
+                        cond,
+                        true_branch: branch,
+                        false_branch: else_branch,
+                    }),
+                    Some(_) => Err(ParseError::InvalidIf),
+                    None => Err(ParseError::EndOfInput),
+                }
             }
             Token::DoubleQuote => {
                 // Remove double quotes from the token stream when parsing.
@@ -193,7 +199,11 @@ impl<'a> Parser<'a> {
 
         let body = Box::new(self.parse_expression()?);
 
-        Ok(Expression::Define { decl, body })
+        match self.tokens.peek() {
+            Some(Token::CloseParen) => Ok(Expression::Define { decl, body }),
+            Some(_) => Err(ParseError::InvalidDefinition),
+            None => Err(ParseError::EndOfInput),
+        }
     }
 }
 
@@ -333,6 +343,14 @@ mod tests {
     }
 
     #[test]
+    fn ill_formed_define() {
+        assert_eq!(
+            parse("(define x 1 2 3)"),
+            Err(ParseError::InvalidDefinition),
+        )
+    }
+
+    #[test]
     fn factorial() {
         assert_eq!(
             parse("(define (factorial x) (if (< x 1) 1 (* x (factorial (- x 1)))))"),
@@ -360,5 +378,10 @@ mod tests {
                 }]))
             }]))
         )
+    }
+
+    #[test]
+    fn ill_formed_conditional() {
+        assert_eq!(parse("(if <= 2 5 1 2)"), Err(ParseError::InvalidIf))
     }
 }
