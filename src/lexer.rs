@@ -6,6 +6,7 @@ pub enum Token<'a> {
     CloseParen,
     DoubleQuote,
     Define,
+    If,
     Bool(bool),
     Number(u64),
     Decimal(f64),
@@ -23,6 +24,7 @@ impl<'a> Token<'a> {
                 ")" => Token::CloseParen,
                 "\"" => Token::DoubleQuote,
                 "define" => Token::Define,
+                "if" => Token::If,
                 _ => {
                     if let Ok(b) = word.parse() {
                         Token::Bool(b)
@@ -46,6 +48,7 @@ impl fmt::Display for Token<'_> {
             Token::CloseParen => write!(f, ")"),
             Token::DoubleQuote => write!(f, "\""),
             Token::Define => write!(f, "define"),
+            Token::If => write!(f, "if"),
             Token::Bool(b) => write!(f, "{b}"),
             Token::Number(n) => write!(f, "{n}"),
             Token::Decimal(d) => write!(f, "{d}"),

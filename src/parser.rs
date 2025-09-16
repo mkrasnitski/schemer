@@ -16,6 +16,11 @@ pub enum Expression<'a> {
         decl: Declaration<'a>,
         body: Box<Expression<'a>>,
     },
+    If {
+        cond: Box<Expression<'a>>,
+        true_branch: Box<Expression<'a>>,
+        false_branch: Box<Expression<'a>>,
+    },
     List(Vec<Expression<'a>>),
 }
 
@@ -41,6 +46,11 @@ impl fmt::Display for Expression<'_> {
                 }
                 write!(f, " {body}")
             }
+            Expression::If {
+                cond,
+                true_branch,
+                false_branch,
+            } => write!(f, "if {cond} {true_branch} {false_branch}"),
             Expression::List(list) => {
                 write!(
                     f,
@@ -127,6 +137,17 @@ impl<'a> Parser<'a> {
             Token::Decimal(d) => Ok(Expression::Decimal(d)),
             Token::Symbol(s) => Ok(Expression::Symbol(s)),
             Token::Define => self.parse_definition(),
+            Token::If => {
+                let cond = Box::new(self.parse_expression()?);
+                let branch = Box::new(self.parse_expression()?);
+                let else_branch = Box::new(self.parse_expression()?);
+
+                Ok(Expression::If {
+                    cond,
+                    true_branch: branch,
+                    false_branch: else_branch,
+                })
+            }
             Token::DoubleQuote => {
                 // Remove double quotes from the token stream when parsing.
                 let literal = match self.tokens.next() {
@@ -307,6 +328,36 @@ mod tests {
                     Expression::Symbol("a"),
                     Expression::Number(1),
                 ])),
+            }]))
+        )
+    }
+
+    #[test]
+    fn factorial() {
+        assert_eq!(
+            parse("(define (factorial x) (if (< x 1) 1 (* x (factorial (- x 1)))))"),
+            Ok(Expression::List(vec![Expression::Define {
+                decl: Declaration::Function(vec!["factorial", "x"]),
+                body: Box::new(Expression::List(vec![Expression::If {
+                    cond: Box::new(Expression::List(vec![
+                        Expression::Symbol("<"),
+                        Expression::Symbol("x"),
+                        Expression::Number(1)
+                    ])),
+                    true_branch: Box::new(Expression::Number(1)),
+                    false_branch: Box::new(Expression::List(vec![
+                        Expression::Symbol("*"),
+                        Expression::Symbol("x"),
+                        Expression::List(vec![
+                            Expression::Symbol("factorial"),
+                            Expression::List(vec![
+                                Expression::Symbol("-"),
+                                Expression::Symbol("x"),
+                                Expression::Number(1),
+                            ])
+                        ])
+                    ]))
+                }]))
             }]))
         )
     }
