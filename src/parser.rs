@@ -3,7 +3,7 @@ use std::iter::Peekable;
 
 use crate::lexer::{Token, TokenStream};
 
-type ParseResult<'a, T> = Result<T, ParseError<'a>>;
+type ParseResult<'a> = Result<Expression<'a>, ParseError<'a>>;
 
 #[derive(Debug, PartialEq)]
 pub enum Expression<'a> {
@@ -27,7 +27,7 @@ pub enum Expression<'a> {
 #[derive(Debug, PartialEq)]
 pub enum Declaration<'a> {
     Variable(&'a str),
-    Function(Vec<&'a str>),
+    Function { name: &'a str, params: Vec<&'a str> },
 }
 
 impl fmt::Display for Expression<'_> {
@@ -39,18 +39,24 @@ impl fmt::Display for Expression<'_> {
             Expression::StringLiteral(s) => write!(f, "{s:?}"),
             Expression::Symbol(s) => write!(f, "{s}"),
             Expression::Define { decl, body } => {
-                write!(f, "define ")?;
+                write!(f, "(define ")?;
                 match decl {
                     Declaration::Variable(var) => write!(f, "{var}")?,
-                    Declaration::Function(args) => write!(f, "({})", args.join(" "))?,
+                    Declaration::Function { name, params } => {
+                        if params.is_empty() {
+                            write!(f, "({name})")?;
+                        } else {
+                            write!(f, "({name} {})", params.join(" "))?;
+                        }
+                    }
                 }
-                write!(f, " {body}")
+                write!(f, " {body})")
             }
             Expression::If {
                 cond,
                 true_branch,
                 false_branch,
-            } => write!(f, "if {cond} {true_branch} {false_branch}"),
+            } => write!(f, "(if {cond} {true_branch} {false_branch})"),
             Expression::List(list) => {
                 write!(
                     f,
@@ -98,28 +104,29 @@ impl<'a> Parser<'a> {
         }
     }
 
-    pub fn parse(mut self) -> ParseResult<'a, Expression<'a>> {
-        match self.tokens.next() {
-            Some(Token::OpenParen) => {
+    pub fn parse(mut self) -> ParseResult<'a> {
+        match self.next_token()? {
+            Token::OpenParen => {
                 let list = self.parse_list()?;
                 match self.tokens.next() {
                     Some(token) => Err(ParseError::UnexpectedToken(token)),
-                    None => Ok(Expression::List(list)),
+                    None => Ok(list),
                 }
             }
-            Some(token) => Err(ParseError::UnexpectedToken(token)),
-            None => Err(ParseError::EndOfInput),
+            token => Err(ParseError::UnexpectedToken(token)),
         }
     }
 
-    fn parse_list(&mut self) -> ParseResult<'a, Vec<Expression<'a>>> {
+    fn parse_list(&mut self) -> ParseResult<'a> {
         let mut list = Vec::new();
 
         while let Some(token) = self.tokens.peek() {
             match token {
+                Token::Define => return self.parse_definition(),
+                Token::If => return self.parse_if(),
                 Token::CloseParen => {
                     self.tokens.next();
-                    return Ok(list);
+                    return Ok(Expression::List(list));
                 }
                 _ => list.push(self.parse_expression()?),
             }
@@ -128,86 +135,98 @@ impl<'a> Parser<'a> {
         Err(ParseError::EndOfInput)
     }
 
-    fn parse_expression(&mut self) -> ParseResult<'a, Expression<'a>> {
-        let Some(token) = self.tokens.next() else {
-            return Err(ParseError::EndOfInput);
-        };
-
+    fn parse_expression(&mut self) -> ParseResult<'a> {
+        let token = self.next_token()?;
         match token {
             Token::Bool(b) => Ok(Expression::Bool(b)),
             Token::Number(n) => Ok(Expression::Number(n)),
             Token::Decimal(d) => Ok(Expression::Decimal(d)),
             Token::Symbol(s) => Ok(Expression::Symbol(s)),
-            Token::Define => self.parse_definition(),
-            Token::If => {
-                let cond = Box::new(self.parse_expression()?);
-                let branch = Box::new(self.parse_expression()?);
-                let else_branch = Box::new(self.parse_expression()?);
-
-                match self.tokens.peek() {
-                    Some(Token::CloseParen) => Ok(Expression::If {
-                        cond,
-                        true_branch: branch,
-                        false_branch: else_branch,
-                    }),
-                    Some(_) => Err(ParseError::InvalidIf),
-                    None => Err(ParseError::EndOfInput),
-                }
-            }
             Token::DoubleQuote => {
                 // Remove double quotes from the token stream when parsing.
-                let literal = match self.tokens.next() {
-                    Some(Token::StringLiteral(s)) => match self.tokens.next() {
-                        Some(Token::DoubleQuote) => s,
-                        Some(token) => return Err(ParseError::UnexpectedToken(token)),
-                        None => return Err(ParseError::EndOfInput),
+                let literal = match self.next_token()? {
+                    Token::StringLiteral(s) => match self.next_token()? {
+                        Token::DoubleQuote => s,
+                        token => return Err(ParseError::UnexpectedToken(token)),
                     },
                     // Turn two consecutive double-quotes into an empty string literal.
-                    Some(Token::DoubleQuote) => "",
-                    Some(token) => return Err(ParseError::UnexpectedToken(token)),
-                    None => return Err(ParseError::EndOfInput),
+                    Token::DoubleQuote => "",
+                    token => return Err(ParseError::UnexpectedToken(token)),
                 };
                 Ok(Expression::StringLiteral(literal))
             }
-            Token::OpenParen => Ok(Expression::List(self.parse_list()?)),
+            Token::OpenParen => self.parse_list(),
             // Closing parens need a matching open paren.
-            Token::CloseParen => return Err(ParseError::UnexpectedToken(token)),
+            Token::CloseParen => Err(ParseError::UnexpectedToken(token)),
             // String literals are surrounded by quotes, so bare literals are invalid.
-            Token::StringLiteral(_) => return Err(ParseError::UnexpectedToken(token)),
+            // Definitions and if statements are parsed inside `self.parse_list` and
+            // must be preceded by an open parentheses.
+            Token::StringLiteral(_) | Token::Define | Token::If => {
+                Err(ParseError::UnexpectedToken(token))
+            }
         }
     }
 
-    fn parse_definition(&mut self) -> ParseResult<'a, Expression<'a>> {
-        let Some(token) = self.tokens.next() else {
-            return Err(ParseError::EndOfInput);
+    fn parse_if(&mut self) -> ParseResult<'a> {
+        let Token::If = self.next_token()? else {
+            return Err(ParseError::InvalidIf);
         };
 
-        let decl = match token {
+        let cond = Box::new(self.parse_expression()?);
+        let branch = Box::new(self.parse_expression()?);
+        let else_branch = Box::new(self.parse_expression()?);
+
+        match self.next_token()? {
+            Token::CloseParen => Ok(Expression::If {
+                cond,
+                true_branch: branch,
+                false_branch: else_branch,
+            }),
+            _ => Err(ParseError::InvalidIf),
+        }
+    }
+
+    fn parse_definition(&mut self) -> ParseResult<'a> {
+        let Token::Define = self.next_token()? else {
+            return Err(ParseError::InvalidDefinition);
+        };
+
+        let decl = match self.next_token()? {
             Token::Symbol(s) => Declaration::Variable(s),
-            Token::OpenParen => Declaration::Function(
-                self.parse_list()?
-                    .into_iter()
+            Token::OpenParen => {
+                let Expression::List(list) = self.parse_list()? else {
+                    return Err(ParseError::InvalidDefinition);
+                };
+                let mut list = list.into_iter();
+                let Some(Expression::Symbol(name)) = list.next() else {
+                    return Err(ParseError::InvalidDefinition);
+                };
+                let params = list
                     .map(|e| match e {
                         Expression::Symbol(s) => Some(s),
                         _ => None,
                     })
                     .collect::<Option<Vec<_>>>()
-                    .ok_or(ParseError::InvalidDefinition)?,
-            ),
+                    .ok_or(ParseError::InvalidDefinition)?;
+                Declaration::Function { name, params }
+            }
             _ => return Err(ParseError::InvalidDefinition),
         };
 
         let body = Box::new(self.parse_expression()?);
 
-        match self.tokens.peek() {
-            Some(Token::CloseParen) => Ok(Expression::Define { decl, body }),
-            Some(_) => Err(ParseError::InvalidDefinition),
-            None => Err(ParseError::EndOfInput),
+        match self.next_token()? {
+            Token::CloseParen => Ok(Expression::Define { decl, body }),
+            _ => Err(ParseError::InvalidDefinition),
         }
+    }
+
+    fn next_token(&mut self) -> Result<Token<'a>, ParseError<'a>> {
+        self.tokens.next().ok_or(ParseError::EndOfInput)
     }
 }
 
-pub fn parse(input: &str) -> ParseResult<'_, Expression<'_>> {
+pub fn parse(input: &str) -> ParseResult<'_> {
     Parser::new(input).parse()
 }
 
@@ -309,10 +328,10 @@ mod tests {
     fn define_var() {
         assert_eq!(
             parse("(define a 5)"),
-            Ok(Expression::List(vec![Expression::Define {
+            Ok(Expression::Define {
                 decl: Declaration::Variable("a"),
                 body: Box::new(Expression::Number(5)),
-            }]))
+            })
         )
     }
 
@@ -320,10 +339,13 @@ mod tests {
     fn define_var_paren() {
         assert_eq!(
             parse("(define (a) 5)"),
-            Ok(Expression::List(vec![Expression::Define {
-                decl: Declaration::Function(vec!["a"]),
+            Ok(Expression::Define {
+                decl: Declaration::Function {
+                    name: "a",
+                    params: vec![]
+                },
                 body: Box::new(Expression::Number(5)),
-            }]))
+            })
         )
     }
 
@@ -331,13 +353,27 @@ mod tests {
     fn define_function() {
         assert_eq!(
             parse("(define (add1 a) (+ a 1))"),
-            Ok(Expression::List(vec![Expression::Define {
-                decl: Declaration::Function(vec!["add1", "a"]),
+            Ok(Expression::Define {
+                decl: Declaration::Function {
+                    name: "add1",
+                    params: vec!["a"]
+                },
                 body: Box::new(Expression::List(vec![
                     Expression::Symbol("+"),
                     Expression::Symbol("a"),
                     Expression::Number(1),
                 ])),
+            })
+        )
+    }
+
+    #[test]
+    fn nested_define() {
+        assert_eq!(
+            parse("((define a 1))"),
+            Ok(Expression::List(vec![Expression::Define {
+                decl: Declaration::Variable("a"),
+                body: Box::new(Expression::Number(1)),
             }]))
         )
     }
@@ -354,9 +390,12 @@ mod tests {
     fn factorial() {
         assert_eq!(
             parse("(define (factorial x) (if (< x 1) 1 (* x (factorial (- x 1)))))"),
-            Ok(Expression::List(vec![Expression::Define {
-                decl: Declaration::Function(vec!["factorial", "x"]),
-                body: Box::new(Expression::List(vec![Expression::If {
+            Ok(Expression::Define {
+                decl: Declaration::Function {
+                    name: "factorial",
+                    params: vec!["x"]
+                },
+                body: Box::new(Expression::If {
                     cond: Box::new(Expression::List(vec![
                         Expression::Symbol("<"),
                         Expression::Symbol("x"),
@@ -375,8 +414,8 @@ mod tests {
                             ])
                         ])
                     ]))
-                }]))
-            }]))
+                })
+            })
         )
     }
 
