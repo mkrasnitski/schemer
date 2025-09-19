@@ -21,6 +21,10 @@ pub enum Expression<'a> {
         true_branch: Box<Expression<'a>>,
         false_branch: Box<Expression<'a>>,
     },
+    Lambda {
+        params: Vec<&'a str>,
+        body: Box<Expression<'a>>,
+    },
     List(Vec<Expression<'a>>),
 }
 
@@ -57,6 +61,9 @@ impl fmt::Display for Expression<'_> {
                 true_branch,
                 false_branch,
             } => write!(f, "(if {cond} {true_branch} {false_branch})"),
+            Expression::Lambda { params, body } => {
+                write!(f, "(lambda ({}) {body})", params.join(" "))
+            }
             Expression::List(list) => {
                 write!(
                     f,
@@ -75,6 +82,7 @@ impl fmt::Display for Expression<'_> {
 pub enum ParseError<'a> {
     EndOfInput,
     UnexpectedToken(Token<'a>),
+    InvalidLambda,
     InvalidDefinition,
     InvalidIf,
 }
@@ -85,6 +93,7 @@ impl fmt::Display for ParseError<'_> {
         match self {
             ParseError::EndOfInput => write!(f, "Unexpected end of input"),
             ParseError::UnexpectedToken(token) => write!(f, "Unexpected token: {token}"),
+            ParseError::InvalidLambda => write!(f, "Invalid lambda"),
             ParseError::InvalidDefinition => write!(f, "Invalid definition"),
             ParseError::InvalidIf => write!(f, "Invalid if clause"),
         }
@@ -122,6 +131,7 @@ impl<'a> Parser<'a> {
 
         while let Some(token) = self.tokens.peek() {
             match token {
+                Token::Lambda => return self.parse_lambda(),
                 Token::Define => return self.parse_definition(),
                 Token::If => return self.parse_if(),
                 Token::CloseParen => {
@@ -159,9 +169,9 @@ impl<'a> Parser<'a> {
             // Closing parens need a matching open paren.
             Token::CloseParen => Err(ParseError::UnexpectedToken(token)),
             // String literals are surrounded by quotes, so bare literals are invalid.
-            // Definitions and if statements are parsed inside `self.parse_list` and
-            // must be preceded by an open parentheses.
-            Token::StringLiteral(_) | Token::Define | Token::If => {
+            // Lambdas, definitions, and if statements are parsed inside `self.parse_list`
+            // and must be preceded by an open parentheses.
+            Token::StringLiteral(_) | Token::Lambda | Token::Define | Token::If => {
                 Err(ParseError::UnexpectedToken(token))
             }
         }
@@ -183,6 +193,29 @@ impl<'a> Parser<'a> {
                 false_branch: else_branch,
             }),
             _ => Err(ParseError::InvalidIf),
+        }
+    }
+
+    fn parse_lambda(&mut self) -> ParseResult<'a> {
+        let Token::Lambda = self.next_token()? else {
+            return Err(ParseError::InvalidLambda);
+        };
+        let Expression::List(list) = self.parse_expression()? else {
+            return Err(ParseError::InvalidLambda);
+        };
+        let params = list
+            .into_iter()
+            .map(|e| match e {
+                Expression::Symbol(s) => Some(s),
+                _ => None,
+            })
+            .collect::<Option<Vec<_>>>()
+            .ok_or(ParseError::InvalidDefinition)?;
+        let body = Box::new(self.parse_expression()?);
+
+        match self.next_token()? {
+            Token::CloseParen => Ok(Expression::Lambda { params, body }),
+            _ => Err(ParseError::InvalidLambda),
         }
     }
 
@@ -321,6 +354,21 @@ mod tests {
                 Expression::StringLiteral(""),
                 Expression::StringLiteral("a"),
             ]))
+        )
+    }
+
+    #[test]
+    fn lambda() {
+        assert_eq!(
+            parse("(lambda (x) (+ x 1))"),
+            Ok(Expression::Lambda {
+                params: vec!["x"],
+                body: Box::new(Expression::List(vec![
+                    Expression::Symbol("+"),
+                    Expression::Symbol("x"),
+                    Expression::Number(1),
+                ]))
+            })
         )
     }
 

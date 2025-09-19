@@ -5,6 +5,7 @@ pub enum Token<'a> {
     OpenParen,
     CloseParen,
     DoubleQuote,
+    Lambda,
     Define,
     If,
     Bool(bool),
@@ -23,6 +24,7 @@ impl<'a> Token<'a> {
                 "(" => Token::OpenParen,
                 ")" => Token::CloseParen,
                 "\"" => Token::DoubleQuote,
+                "lambda" => Token::Lambda,
                 "define" => Token::Define,
                 "if" => Token::If,
                 _ => {
@@ -47,6 +49,7 @@ impl fmt::Display for Token<'_> {
             Token::OpenParen => write!(f, "("),
             Token::CloseParen => write!(f, ")"),
             Token::DoubleQuote => write!(f, "\""),
+            Token::Lambda => write!(f, "lambda"),
             Token::Define => write!(f, "define"),
             Token::If => write!(f, "if"),
             Token::Bool(b) => write!(f, "{b}"),
