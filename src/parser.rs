@@ -5,7 +5,7 @@ use crate::lexer::{Token, TokenStream};
 
 type ParseResult<'a> = Result<Expression<'a>, ParseError<'a>>;
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Expression<'a> {
     Bool(bool),
     Number(u64),
@@ -28,7 +28,7 @@ pub enum Expression<'a> {
     List(Vec<Expression<'a>>),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Declaration<'a> {
     Variable(&'a str),
     Function { name: &'a str, params: Vec<&'a str> },
