@@ -1,3 +1,4 @@
+mod eval;
 mod lexer;
 mod parser;
 
@@ -8,8 +9,8 @@ fn main() {
 
     io::stdin().read_to_string(&mut input).unwrap();
 
-    match parser::parse(&input) {
-        Ok(ast) => println!("{ast:?}"),
+    match eval::eval(&input) {
+        Ok(ast) => println!("{ast}"),
         Err(e) => println!("{e}"),
     }
 }
