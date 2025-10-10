@@ -114,35 +114,11 @@ impl<'a> Parser<'a> {
     }
 
     pub fn parse(mut self) -> ParseResult<'a> {
-        match self.next_token()? {
-            Token::OpenParen => {
-                let list = self.parse_list()?;
-                match self.tokens.next() {
-                    Some(token) => Err(ParseError::UnexpectedToken(token)),
-                    None => Ok(list),
-                }
-            }
-            token => Err(ParseError::UnexpectedToken(token)),
+        let expr = self.parse_expression()?;
+        match self.tokens.next() {
+            Some(token) => Err(ParseError::UnexpectedToken(token)),
+            None => Ok(expr),
         }
-    }
-
-    fn parse_list(&mut self) -> ParseResult<'a> {
-        let mut list = Vec::new();
-
-        while let Some(token) = self.tokens.peek() {
-            match token {
-                Token::Lambda => return self.parse_lambda(),
-                Token::Define => return self.parse_definition(),
-                Token::If => return self.parse_if(),
-                Token::CloseParen => {
-                    self.tokens.next();
-                    return Ok(Expression::List(list));
-                }
-                _ => list.push(self.parse_expression()?),
-            }
-        }
-
-        Err(ParseError::EndOfInput)
     }
 
     fn parse_expression(&mut self) -> ParseResult<'a> {
@@ -175,6 +151,25 @@ impl<'a> Parser<'a> {
                 Err(ParseError::UnexpectedToken(token))
             }
         }
+    }
+
+    fn parse_list(&mut self) -> ParseResult<'a> {
+        let mut list = Vec::new();
+
+        while let Some(token) = self.tokens.peek() {
+            match token {
+                Token::Lambda => return self.parse_lambda(),
+                Token::Define => return self.parse_definition(),
+                Token::If => return self.parse_if(),
+                Token::CloseParen => {
+                    self.tokens.next();
+                    return Ok(Expression::List(list));
+                }
+                _ => list.push(self.parse_expression()?),
+            }
+        }
+
+        Err(ParseError::EndOfInput)
     }
 
     fn parse_if(&mut self) -> ParseResult<'a> {
@@ -268,6 +263,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn bool() {
+        assert_eq!(parse("true"), Ok(Expression::Bool(true)))
+    }
+
+    #[test]
+    fn number() {
+        assert_eq!(parse("1"), Ok(Expression::Number(1)))
+    }
+
+    #[test]
+    fn decimal() {
+        assert_eq!(parse("1.0"), Ok(Expression::Decimal(1.0)))
+    }
+
+    #[test]
     fn add() {
         assert_eq!(
             parse("(+ 1 2)"),
@@ -281,14 +291,14 @@ mod tests {
 
     #[test]
     fn unmatched_open_paren() {
-        assert_eq!(parse("(+ 1 2"), Err(ParseError::EndOfInput),)
+        assert_eq!(parse("(+ 1 2"), Err(ParseError::EndOfInput))
     }
 
     #[test]
     fn unmatched_close_paren() {
         assert_eq!(
             parse("+ 1 2)"),
-            Err(ParseError::UnexpectedToken(Token::Symbol("+"))),
+            Err(ParseError::UnexpectedToken(Token::Number(1))),
         )
     }
 
