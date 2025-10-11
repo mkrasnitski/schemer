@@ -154,22 +154,16 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_list(&mut self) -> ParseResult<'a> {
-        let mut list = Vec::new();
+        let Some(token) = self.tokens.peek() else {
+            return Err(ParseError::EndOfInput);
+        };
 
-        while let Some(token) = self.tokens.peek() {
-            match token {
-                Token::Lambda => return self.parse_lambda(),
-                Token::Define => return self.parse_definition(),
-                Token::If => return self.parse_if(),
-                Token::CloseParen => {
-                    self.tokens.next();
-                    return Ok(Expression::List(list));
-                }
-                _ => list.push(self.parse_expression()?),
-            }
+        match token {
+            Token::Lambda => self.parse_lambda(),
+            Token::Define => self.parse_definition(),
+            Token::If => self.parse_if(),
+            _ => Ok(Expression::List(self.consume_list()?)),
         }
-
-        Err(ParseError::EndOfInput)
     }
 
     fn parse_if(&mut self) -> ParseResult<'a> {
@@ -192,65 +186,73 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_lambda(&mut self) -> ParseResult<'a> {
-        let Token::Lambda = self.next_token()? else {
-            return Err(ParseError::InvalidLambda);
-        };
-        let Expression::List(list) = self.parse_expression()? else {
-            return Err(ParseError::InvalidLambda);
-        };
-        let params = list
+        if let Token::Lambda = self.next_token()?
+            && let Token::OpenParen = self.next_token()?
+        {
+            let params = self.consume_symbol_list()?;
+            let body = Box::new(self.parse_expression()?);
+
+            if let Token::CloseParen = self.next_token()? {
+                return Ok(Expression::Lambda { params, body });
+            }
+        }
+
+        Err(ParseError::InvalidLambda)
+    }
+
+    fn parse_definition(&mut self) -> ParseResult<'a> {
+        if let Token::Define = self.next_token()? {
+            let decl = match self.next_token()? {
+                Token::Symbol(s) => Declaration::Variable(s),
+                Token::OpenParen => {
+                    let symbols = self.consume_symbol_list()?;
+                    let Some((name, params)) = symbols.split_first() else {
+                        return Err(ParseError::InvalidDefinition);
+                    };
+                    Declaration::Function {
+                        name,
+                        params: params.to_vec(),
+                    }
+                }
+                _ => return Err(ParseError::InvalidDefinition),
+            };
+
+            let body = Box::new(self.parse_expression()?);
+            if let Token::CloseParen = self.next_token()? {
+                return Ok(Expression::Define { decl, body });
+            }
+        }
+
+        Err(ParseError::InvalidDefinition)
+    }
+
+    fn next_token(&mut self) -> Result<Token<'a>, ParseError<'a>> {
+        self.tokens.next().ok_or(ParseError::EndOfInput)
+    }
+
+    fn consume_list(&mut self) -> Result<Vec<Expression<'a>>, ParseError<'a>> {
+        let mut list = Vec::new();
+        loop {
+            match self.tokens.peek() {
+                Some(Token::CloseParen) => {
+                    self.tokens.next();
+                    return Ok(list);
+                }
+                Some(_) => list.push(self.parse_expression()?),
+                None => return Err(ParseError::EndOfInput),
+            }
+        }
+    }
+
+    fn consume_symbol_list(&mut self) -> Result<Vec<&'a str>, ParseError<'a>> {
+        self.consume_list()?
             .into_iter()
             .map(|e| match e {
                 Expression::Symbol(s) => Some(s),
                 _ => None,
             })
             .collect::<Option<Vec<_>>>()
-            .ok_or(ParseError::InvalidDefinition)?;
-        let body = Box::new(self.parse_expression()?);
-
-        match self.next_token()? {
-            Token::CloseParen => Ok(Expression::Lambda { params, body }),
-            _ => Err(ParseError::InvalidLambda),
-        }
-    }
-
-    fn parse_definition(&mut self) -> ParseResult<'a> {
-        let Token::Define = self.next_token()? else {
-            return Err(ParseError::InvalidDefinition);
-        };
-
-        let decl = match self.next_token()? {
-            Token::Symbol(s) => Declaration::Variable(s),
-            Token::OpenParen => {
-                let Expression::List(list) = self.parse_list()? else {
-                    return Err(ParseError::InvalidDefinition);
-                };
-                let mut list = list.into_iter();
-                let Some(Expression::Symbol(name)) = list.next() else {
-                    return Err(ParseError::InvalidDefinition);
-                };
-                let params = list
-                    .map(|e| match e {
-                        Expression::Symbol(s) => Some(s),
-                        _ => None,
-                    })
-                    .collect::<Option<Vec<_>>>()
-                    .ok_or(ParseError::InvalidDefinition)?;
-                Declaration::Function { name, params }
-            }
-            _ => return Err(ParseError::InvalidDefinition),
-        };
-
-        let body = Box::new(self.parse_expression()?);
-
-        match self.next_token()? {
-            Token::CloseParen => Ok(Expression::Define { decl, body }),
-            _ => Err(ParseError::InvalidDefinition),
-        }
-    }
-
-    fn next_token(&mut self) -> Result<Token<'a>, ParseError<'a>> {
-        self.tokens.next().ok_or(ParseError::EndOfInput)
+            .ok_or(ParseError::InvalidDefinition)
     }
 }
 
