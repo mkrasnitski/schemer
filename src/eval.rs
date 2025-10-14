@@ -86,23 +86,21 @@ pub fn eval_expr<'a>(expr: Expression<'a>, env: &mut Environment<'a>) -> EvalRes
             Expression::Bool(false) => eval_expr(*false_branch, env),
             _ => Err(EvalError::InvalidCondition),
         },
-        Expression::List(exprs) => {
-            if let Some((op, args)) = exprs.split_first()
-                && let Expression::Lambda { params, body } = eval_expr(op.clone(), env)?
-            {
-                match args.len().cmp(&params.len()) {
-                    Ordering::Less => Err(EvalError::NotEnoughArgs),
-                    Ordering::Greater => Err(EvalError::TooManyArgs),
-                    Ordering::Equal => {
-                        let mut local_env = env.clone();
-                        for (param, arg) in params.into_iter().zip(args) {
-                            local_env.insert(param, eval_expr(arg.clone(), env)?);
-                        }
-                        eval_expr(*body, &mut local_env)
+        Expression::Apply { op, args } => {
+            let Expression::Lambda { params, body } = eval_expr(*op, env)? else {
+                return Err(EvalError::InvalidApply);
+            };
+
+            match args.len().cmp(&params.len()) {
+                Ordering::Less => Err(EvalError::NotEnoughArgs),
+                Ordering::Greater => Err(EvalError::TooManyArgs),
+                Ordering::Equal => {
+                    let mut local_env = env.clone();
+                    for (param, arg) in params.into_iter().zip(args) {
+                        local_env.insert(param, eval_expr(arg, env)?);
                     }
+                    eval_expr(*body, &mut local_env)
                 }
-            } else {
-                Err(EvalError::InvalidApply)
             }
         }
     }
