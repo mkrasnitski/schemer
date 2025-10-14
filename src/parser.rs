@@ -25,7 +25,10 @@ pub enum Expression<'a> {
         params: Vec<&'a str>,
         body: Box<Expression<'a>>,
     },
-    List(Vec<Expression<'a>>),
+    Apply {
+        op: Box<Expression<'a>>,
+        args: Vec<Expression<'a>>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -64,15 +67,19 @@ impl fmt::Display for Expression<'_> {
             Expression::Lambda { params, body } => {
                 write!(f, "(lambda ({}) {body})", params.join(" "))
             }
-            Expression::List(list) => {
-                write!(
-                    f,
-                    "({})",
-                    list.iter()
-                        .map(|expr| format!("{expr}"))
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                )
+            Expression::Apply { op, args } => {
+                if args.is_empty() {
+                    write!(f, "({op})")
+                } else {
+                    write!(
+                        f,
+                        "({op} {})",
+                        args.iter()
+                            .map(|expr| format!("{expr}"))
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    )
+                }
             }
         }
     }
@@ -85,6 +92,7 @@ pub enum ParseError<'a> {
     InvalidLambda,
     InvalidDefinition,
     InvalidIf,
+    EmptyApply,
 }
 
 impl fmt::Display for ParseError<'_> {
@@ -96,6 +104,7 @@ impl fmt::Display for ParseError<'_> {
             ParseError::InvalidLambda => write!(f, "Invalid lambda"),
             ParseError::InvalidDefinition => write!(f, "Invalid definition"),
             ParseError::InvalidIf => write!(f, "Invalid if clause"),
+            ParseError::EmptyApply => write!(f, "Empty function application"),
         }
     }
 }
@@ -162,7 +171,14 @@ impl<'a> Parser<'a> {
             Token::Lambda => self.parse_lambda(),
             Token::Define => self.parse_definition(),
             Token::If => self.parse_if(),
-            _ => Ok(Expression::List(self.consume_list()?)),
+            Token::CloseParen => Err(ParseError::EmptyApply),
+            _ => {
+                let op = Box::new(self.parse_expression()?);
+                Ok(Expression::Apply {
+                    op,
+                    args: self.consume_list()?,
+                })
+            }
         }
     }
 
@@ -283,11 +299,10 @@ mod tests {
     fn add() {
         assert_eq!(
             parse("(+ 1 2)"),
-            Ok(Expression::List(vec![
-                Expression::Symbol("+"),
-                Expression::Number(1),
-                Expression::Number(2)
-            ]))
+            Ok(Expression::Apply {
+                op: Box::new(Expression::Symbol("+")),
+                args: vec![Expression::Number(1), Expression::Number(2)]
+            })
         )
     }
 
@@ -308,15 +323,16 @@ mod tests {
     fn nested_lists() {
         assert_eq!(
             parse("(+ 1 (+ 2 3))"),
-            Ok(Expression::List(vec![
-                Expression::Symbol("+"),
-                Expression::Number(1),
-                Expression::List(vec![
-                    Expression::Symbol("+"),
-                    Expression::Number(2),
-                    Expression::Number(3),
-                ])
-            ]))
+            Ok(Expression::Apply {
+                op: Box::new(Expression::Symbol("+")),
+                args: vec![
+                    Expression::Number(1),
+                    Expression::Apply {
+                        op: Box::new(Expression::Symbol("+")),
+                        args: vec![Expression::Number(2), Expression::Number(3)]
+                    }
+                ]
+            })
         )
     }
 
@@ -332,11 +348,13 @@ mod tests {
     fn string() {
         assert_eq!(
             parse(r#"(+ "a" "b")"#),
-            Ok(Expression::List(vec![
-                Expression::Symbol("+"),
-                Expression::StringLiteral("a"),
-                Expression::StringLiteral("b"),
-            ]))
+            Ok(Expression::Apply {
+                op: Box::new(Expression::Symbol("+")),
+                args: vec![
+                    Expression::StringLiteral("a"),
+                    Expression::StringLiteral("b"),
+                ]
+            })
         )
     }
 
@@ -349,11 +367,13 @@ mod tests {
     fn nested_tokens() {
         assert_eq!(
             parse(r#"(+ "a + " "b + c")"#),
-            Ok(Expression::List(vec![
-                Expression::Symbol("+"),
-                Expression::StringLiteral("a + "),
-                Expression::StringLiteral("b + c"),
-            ]))
+            Ok(Expression::Apply {
+                op: Box::new(Expression::Symbol("+")),
+                args: vec![
+                    Expression::StringLiteral("a + "),
+                    Expression::StringLiteral("b + c"),
+                ]
+            })
         )
     }
 
@@ -361,11 +381,13 @@ mod tests {
     fn empty_string() {
         assert_eq!(
             parse(r#"(+ "" "a")"#),
-            Ok(Expression::List(vec![
-                Expression::Symbol("+"),
-                Expression::StringLiteral(""),
-                Expression::StringLiteral("a"),
-            ]))
+            Ok(Expression::Apply {
+                op: Box::new(Expression::Symbol("+")),
+                args: vec![
+                    Expression::StringLiteral(""),
+                    Expression::StringLiteral("a"),
+                ],
+            })
         )
     }
 
@@ -375,11 +397,10 @@ mod tests {
             parse("(lambda (x) (+ x 1))"),
             Ok(Expression::Lambda {
                 params: vec!["x"],
-                body: Box::new(Expression::List(vec![
-                    Expression::Symbol("+"),
-                    Expression::Symbol("x"),
-                    Expression::Number(1),
-                ]))
+                body: Box::new(Expression::Apply {
+                    op: Box::new(Expression::Symbol("+")),
+                    args: vec![Expression::Symbol("x"), Expression::Number(1)]
+                })
             })
         )
     }
@@ -418,11 +439,10 @@ mod tests {
                     name: "add1",
                     params: vec!["a"]
                 },
-                body: Box::new(Expression::List(vec![
-                    Expression::Symbol("+"),
-                    Expression::Symbol("a"),
-                    Expression::Number(1),
-                ])),
+                body: Box::new(Expression::Apply {
+                    op: Box::new(Expression::Symbol("+")),
+                    args: vec![Expression::Symbol("a"), Expression::Number(1)]
+                })
             })
         )
     }
@@ -431,10 +451,13 @@ mod tests {
     fn nested_define() {
         assert_eq!(
             parse("((define a 1))"),
-            Ok(Expression::List(vec![Expression::Define {
-                decl: Declaration::Variable("a"),
-                body: Box::new(Expression::Number(1)),
-            }]))
+            Ok(Expression::Apply {
+                op: Box::new(Expression::Define {
+                    decl: Declaration::Variable("a"),
+                    body: Box::new(Expression::Number(1))
+                }),
+                args: vec![],
+            })
         )
     }
 
@@ -456,24 +479,24 @@ mod tests {
                     params: vec!["x"]
                 },
                 body: Box::new(Expression::If {
-                    cond: Box::new(Expression::List(vec![
-                        Expression::Symbol("<"),
-                        Expression::Symbol("x"),
-                        Expression::Number(1)
-                    ])),
+                    cond: Box::new(Expression::Apply {
+                        op: Box::new(Expression::Symbol("<")),
+                        args: vec![Expression::Symbol("x"), Expression::Number(1)]
+                    }),
                     true_branch: Box::new(Expression::Number(1)),
-                    false_branch: Box::new(Expression::List(vec![
-                        Expression::Symbol("*"),
-                        Expression::Symbol("x"),
-                        Expression::List(vec![
-                            Expression::Symbol("factorial"),
-                            Expression::List(vec![
-                                Expression::Symbol("-"),
-                                Expression::Symbol("x"),
-                                Expression::Number(1),
-                            ])
-                        ])
-                    ]))
+                    false_branch: Box::new(Expression::Apply {
+                        op: Box::new(Expression::Symbol("*")),
+                        args: vec![
+                            Expression::Symbol("x"),
+                            Expression::Apply {
+                                op: Box::new(Expression::Symbol("factorial")),
+                                args: vec![Expression::Apply {
+                                    op: Box::new(Expression::Symbol("-")),
+                                    args: vec![Expression::Symbol("x"), Expression::Number(1)]
+                                }]
+                            }
+                        ]
+                    })
                 })
             })
         )
