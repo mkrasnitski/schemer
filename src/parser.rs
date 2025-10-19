@@ -1,7 +1,7 @@
 use std::fmt;
 use std::iter::Peekable;
 
-use crate::lexer::{Token, TokenStream};
+use crate::lexer::{Operator, Token, TokenStream};
 
 type ParseResult<'a> = Result<Expression<'a>, ParseError<'a>>;
 
@@ -12,6 +12,7 @@ pub enum Expression<'a> {
     Decimal(f64),
     StringLiteral(&'a str),
     Symbol(&'a str),
+    Operator(Operator),
     Define {
         decl: Declaration<'a>,
         body: Box<Expression<'a>>,
@@ -45,6 +46,7 @@ impl fmt::Display for Expression<'_> {
             Expression::Decimal(d) => write!(f, "{d}"),
             Expression::StringLiteral(s) => write!(f, "{s:?}"),
             Expression::Symbol(s) => write!(f, "{s}"),
+            Expression::Operator(op) => write!(f, "{op}"),
             Expression::Define { decl, body } => {
                 write!(f, "(define ")?;
                 match decl {
@@ -122,14 +124,6 @@ impl<'a> Parser<'a> {
         }
     }
 
-    pub fn parse(mut self) -> ParseResult<'a> {
-        let expr = self.parse_expression()?;
-        match self.tokens.next() {
-            Some(token) => Err(ParseError::UnexpectedToken(token)),
-            None => Ok(expr),
-        }
-    }
-
     fn parse_expression(&mut self) -> ParseResult<'a> {
         let token = self.next_token()?;
         match token {
@@ -137,6 +131,7 @@ impl<'a> Parser<'a> {
             Token::Number(n) => Ok(Expression::Number(n)),
             Token::Decimal(d) => Ok(Expression::Decimal(d)),
             Token::Symbol(s) => Ok(Expression::Symbol(s)),
+            Token::Operator(op) => Ok(Expression::Operator(op)),
             Token::DoubleQuote => {
                 // Remove double quotes from the token stream when parsing.
                 let literal = match self.next_token()? {
@@ -272,37 +267,49 @@ impl<'a> Parser<'a> {
     }
 }
 
-pub fn parse(input: &str) -> ParseResult<'_> {
-    Parser::new(input).parse()
+impl<'a> Iterator for Parser<'a> {
+    type Item = ParseResult<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.tokens.peek().is_none() {
+            None
+        } else {
+            Some(self.parse_expression())
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn parse(input: &str) -> Result<Vec<Expression<'_>>, ParseError<'_>> {
+        Parser::new(input).collect()
+    }
+
     #[test]
     fn bool() {
-        assert_eq!(parse("true"), Ok(Expression::Bool(true)))
+        assert_eq!(parse("true"), Ok(vec![Expression::Bool(true)]))
     }
 
     #[test]
     fn number() {
-        assert_eq!(parse("1"), Ok(Expression::Number(1)))
+        assert_eq!(parse("1"), Ok(vec![Expression::Number(1)]))
     }
 
     #[test]
     fn decimal() {
-        assert_eq!(parse("1.0"), Ok(Expression::Decimal(1.0)))
+        assert_eq!(parse("1.0"), Ok(vec![Expression::Decimal(1.0)]))
     }
 
     #[test]
     fn add() {
         assert_eq!(
             parse("(+ 1 2)"),
-            Ok(Expression::Apply {
-                op: Box::new(Expression::Symbol("+")),
+            Ok(vec![Expression::Apply {
+                op: Box::new(Expression::Operator(Operator::Plus)),
                 args: vec![Expression::Number(1), Expression::Number(2)]
-            })
+            }])
         )
     }
 
@@ -315,7 +322,7 @@ mod tests {
     fn unmatched_close_paren() {
         assert_eq!(
             parse("+ 1 2)"),
-            Err(ParseError::UnexpectedToken(Token::Number(1))),
+            Err(ParseError::UnexpectedToken(Token::CloseParen)),
         )
     }
 
@@ -323,24 +330,16 @@ mod tests {
     fn nested_lists() {
         assert_eq!(
             parse("(+ 1 (+ 2 3))"),
-            Ok(Expression::Apply {
-                op: Box::new(Expression::Symbol("+")),
+            Ok(vec![Expression::Apply {
+                op: Box::new(Expression::Operator(Operator::Plus)),
                 args: vec![
                     Expression::Number(1),
                     Expression::Apply {
-                        op: Box::new(Expression::Symbol("+")),
+                        op: Box::new(Expression::Operator(Operator::Plus)),
                         args: vec![Expression::Number(2), Expression::Number(3)]
                     }
                 ]
-            })
-        )
-    }
-
-    #[test]
-    fn trailing_tokens() {
-        assert_eq!(
-            parse("(+ 1 2) a"),
-            Err(ParseError::UnexpectedToken(Token::Symbol("a"))),
+            }])
         )
     }
 
@@ -348,13 +347,13 @@ mod tests {
     fn string() {
         assert_eq!(
             parse(r#"(+ "a" "b")"#),
-            Ok(Expression::Apply {
-                op: Box::new(Expression::Symbol("+")),
+            Ok(vec![Expression::Apply {
+                op: Box::new(Expression::Operator(Operator::Plus)),
                 args: vec![
                     Expression::StringLiteral("a"),
                     Expression::StringLiteral("b"),
                 ]
-            })
+            }])
         )
     }
 
@@ -367,13 +366,13 @@ mod tests {
     fn nested_tokens() {
         assert_eq!(
             parse(r#"(+ "a + " "b + c")"#),
-            Ok(Expression::Apply {
-                op: Box::new(Expression::Symbol("+")),
+            Ok(vec![Expression::Apply {
+                op: Box::new(Expression::Operator(Operator::Plus)),
                 args: vec![
                     Expression::StringLiteral("a + "),
                     Expression::StringLiteral("b + c"),
                 ]
-            })
+            }])
         )
     }
 
@@ -381,13 +380,13 @@ mod tests {
     fn empty_string() {
         assert_eq!(
             parse(r#"(+ "" "a")"#),
-            Ok(Expression::Apply {
-                op: Box::new(Expression::Symbol("+")),
+            Ok(vec![Expression::Apply {
+                op: Box::new(Expression::Operator(Operator::Plus)),
                 args: vec![
                     Expression::StringLiteral(""),
                     Expression::StringLiteral("a"),
                 ],
-            })
+            }])
         )
     }
 
@@ -395,13 +394,13 @@ mod tests {
     fn lambda() {
         assert_eq!(
             parse("(lambda (x) (+ x 1))"),
-            Ok(Expression::Lambda {
+            Ok(vec![Expression::Lambda {
                 params: vec!["x"],
                 body: Box::new(Expression::Apply {
-                    op: Box::new(Expression::Symbol("+")),
+                    op: Box::new(Expression::Operator(Operator::Plus)),
                     args: vec![Expression::Symbol("x"), Expression::Number(1)]
                 })
-            })
+            }])
         )
     }
 
@@ -409,10 +408,10 @@ mod tests {
     fn define_var() {
         assert_eq!(
             parse("(define a 5)"),
-            Ok(Expression::Define {
+            Ok(vec![Expression::Define {
                 decl: Declaration::Variable("a"),
                 body: Box::new(Expression::Number(5)),
-            })
+            }])
         )
     }
 
@@ -420,13 +419,13 @@ mod tests {
     fn define_var_paren() {
         assert_eq!(
             parse("(define (a) 5)"),
-            Ok(Expression::Define {
+            Ok(vec![Expression::Define {
                 decl: Declaration::Function {
                     name: "a",
                     params: vec![]
                 },
                 body: Box::new(Expression::Number(5)),
-            })
+            }])
         )
     }
 
@@ -434,16 +433,16 @@ mod tests {
     fn define_function() {
         assert_eq!(
             parse("(define (add1 a) (+ a 1))"),
-            Ok(Expression::Define {
+            Ok(vec![Expression::Define {
                 decl: Declaration::Function {
                     name: "add1",
                     params: vec!["a"]
                 },
                 body: Box::new(Expression::Apply {
-                    op: Box::new(Expression::Symbol("+")),
+                    op: Box::new(Expression::Operator(Operator::Plus)),
                     args: vec![Expression::Symbol("a"), Expression::Number(1)]
                 })
-            })
+            }])
         )
     }
 
@@ -451,13 +450,13 @@ mod tests {
     fn nested_define() {
         assert_eq!(
             parse("((define a 1))"),
-            Ok(Expression::Apply {
+            Ok(vec![Expression::Apply {
                 op: Box::new(Expression::Define {
                     decl: Declaration::Variable("a"),
                     body: Box::new(Expression::Number(1))
                 }),
                 args: vec![],
-            })
+            }])
         )
     }
 
@@ -473,37 +472,60 @@ mod tests {
     fn factorial() {
         assert_eq!(
             parse("(define (factorial x) (if (< x 1) 1 (* x (factorial (- x 1)))))"),
-            Ok(Expression::Define {
+            Ok(vec![Expression::Define {
                 decl: Declaration::Function {
                     name: "factorial",
                     params: vec!["x"]
                 },
                 body: Box::new(Expression::If {
                     cond: Box::new(Expression::Apply {
-                        op: Box::new(Expression::Symbol("<")),
+                        op: Box::new(Expression::Operator(Operator::Less)),
                         args: vec![Expression::Symbol("x"), Expression::Number(1)]
                     }),
                     true_branch: Box::new(Expression::Number(1)),
                     false_branch: Box::new(Expression::Apply {
-                        op: Box::new(Expression::Symbol("*")),
+                        op: Box::new(Expression::Operator(Operator::Star)),
                         args: vec![
                             Expression::Symbol("x"),
                             Expression::Apply {
                                 op: Box::new(Expression::Symbol("factorial")),
                                 args: vec![Expression::Apply {
-                                    op: Box::new(Expression::Symbol("-")),
+                                    op: Box::new(Expression::Operator(Operator::Minus)),
                                     args: vec![Expression::Symbol("x"), Expression::Number(1)]
                                 }]
                             }
                         ]
                     })
                 })
-            })
+            }])
         )
     }
 
     #[test]
     fn ill_formed_conditional() {
         assert_eq!(parse("(if <= 2 5 1 2)"), Err(ParseError::InvalidIf))
+    }
+
+    #[test]
+    fn multiple_exprs() {
+        assert_eq!(
+            parse("(define (inc x) (+ x 1)) (inc 3)"),
+            Ok(vec![
+                Expression::Define {
+                    decl: Declaration::Function {
+                        name: "inc",
+                        params: vec!["x"],
+                    },
+                    body: Box::new(Expression::Apply {
+                        op: Box::new(Expression::Operator(Operator::Plus)),
+                        args: vec![Expression::Symbol("x"), Expression::Number(1)],
+                    })
+                },
+                Expression::Apply {
+                    op: Box::new(Expression::Symbol("inc")),
+                    args: vec![Expression::Number(3)]
+                }
+            ])
+        )
     }
 }

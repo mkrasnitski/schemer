@@ -2,7 +2,8 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt;
 
-use crate::parser::{Declaration, Expression, ParseError, parse};
+use crate::lexer::Operator;
+use crate::parser::{Declaration, Expression, ParseError, Parser};
 
 pub type InterpreterResult<'a> = Result<Expression<'a>, InterpreterError<'a>>;
 pub type EvalResult<'a> = Result<Expression<'a>, EvalError<'a>>;
@@ -29,6 +30,7 @@ pub enum EvalError<'a> {
     InvalidApply,
     NotEnoughArgs,
     TooManyArgs,
+    InvalidArgs,
 }
 
 impl fmt::Display for EvalError<'_> {
@@ -39,6 +41,7 @@ impl fmt::Display for EvalError<'_> {
             EvalError::InvalidApply => write!(f, "Invalid function application"),
             EvalError::NotEnoughArgs => write!(f, "Not enough arguments"),
             EvalError::TooManyArgs => write!(f, "Too many arguments"),
+            EvalError::InvalidArgs => write!(f, "Invalid function arguments"),
         }
     }
 }
@@ -64,6 +67,7 @@ pub fn eval_expr<'a>(expr: Expression<'a>, env: &mut Environment<'a>) -> EvalRes
         | Expression::Number(_)
         | Expression::Decimal(_)
         | Expression::StringLiteral(_)
+        | Expression::Operator(_)
         | Expression::Lambda { .. } => Ok(expr),
         Expression::Symbol(s) => env.get(s).ok_or(EvalError::UndefinedSymbol(s)),
         Expression::Define { decl, body } => match decl {
@@ -86,12 +90,8 @@ pub fn eval_expr<'a>(expr: Expression<'a>, env: &mut Environment<'a>) -> EvalRes
             Expression::Bool(false) => eval_expr(*false_branch, env),
             _ => Err(EvalError::InvalidCondition),
         },
-        Expression::Apply { op, args } => {
-            let Expression::Lambda { params, body } = eval_expr(*op, env)? else {
-                return Err(EvalError::InvalidApply);
-            };
-
-            match args.len().cmp(&params.len()) {
+        Expression::Apply { op, args } => match eval_expr(*op, env)? {
+            Expression::Lambda { params, body } => match args.len().cmp(&params.len()) {
                 Ordering::Less => Err(EvalError::NotEnoughArgs),
                 Ordering::Greater => Err(EvalError::TooManyArgs),
                 Ordering::Equal => {
@@ -101,15 +101,88 @@ pub fn eval_expr<'a>(expr: Expression<'a>, env: &mut Environment<'a>) -> EvalRes
                     }
                     eval_expr(*body, &mut local_env)
                 }
+            },
+            Expression::Operator(op) => {
+                let [l, r] = args
+                    .try_into()
+                    .map_err(|args: Vec<_>| match args.len().cmp(&2) {
+                        Ordering::Less => EvalError::NotEnoughArgs,
+                        Ordering::Greater => EvalError::TooManyArgs,
+                        Ordering::Equal => unreachable!(),
+                    })?;
+                match (eval_expr(l, env)?, eval_expr(r, env)?) {
+                    (Expression::Number(l), Expression::Number(r)) => Ok(op.eval_args(l, r)),
+                    (Expression::Decimal(l), Expression::Decimal(r)) => Ok(op.eval_args(l, r)),
+                    _ => Err(EvalError::InvalidArgs),
+                }
             }
+            _ => Err(EvalError::InvalidApply),
+        },
+    }
+}
+
+impl Operator {
+    fn eval_args<T, U>(self, left: T, right: U) -> Expression<'static>
+    where
+        BinaryArgs<T, U>: EvalOperator,
+    {
+        BinaryArgs { left, right }.eval_operator(self)
+    }
+}
+
+struct BinaryArgs<T, U> {
+    left: T,
+    right: U,
+}
+
+trait EvalOperator {
+    fn eval_operator(&self, op: Operator) -> Expression<'static>;
+}
+
+impl EvalOperator for BinaryArgs<u64, u64> {
+    fn eval_operator(&self, op: Operator) -> Expression<'static> {
+        match op {
+            Operator::Plus => Expression::Number(self.left + self.right),
+            Operator::Minus => Expression::Number(self.left - self.right),
+            Operator::Star => Expression::Number(self.left * self.right),
+            Operator::Slash => Expression::Number(self.left / self.right),
+            Operator::Equal => Expression::Bool(self.left == self.right),
+            Operator::NotEqual => Expression::Bool(self.left != self.right),
+            Operator::Less => Expression::Bool(self.left < self.right),
+            Operator::LessOrEqual => Expression::Bool(self.left <= self.right),
+            Operator::Greater => Expression::Bool(self.left > self.right),
+            Operator::GreaterOrEqual => Expression::Bool(self.left >= self.right),
+        }
+    }
+}
+
+impl EvalOperator for BinaryArgs<f64, f64> {
+    fn eval_operator(&self, op: Operator) -> Expression<'static> {
+        match op {
+            Operator::Plus => Expression::Decimal(self.left + self.right),
+            Operator::Minus => Expression::Decimal(self.left - self.right),
+            Operator::Star => Expression::Decimal(self.left * self.right),
+            Operator::Slash => Expression::Decimal(self.left / self.right),
+            Operator::Equal => Expression::Bool(self.left == self.right),
+            Operator::NotEqual => Expression::Bool(self.left != self.right),
+            Operator::Less => Expression::Bool(self.left < self.right),
+            Operator::LessOrEqual => Expression::Bool(self.left <= self.right),
+            Operator::Greater => Expression::Bool(self.left > self.right),
+            Operator::GreaterOrEqual => Expression::Bool(self.left >= self.right),
         }
     }
 }
 
 pub fn eval(program: &str) -> InterpreterResult<'_> {
     let mut env = Environment::default();
-    let expr = parse(program).map_err(InterpreterError::Parse)?;
-    eval_expr(expr, &mut env).map_err(InterpreterError::Eval)
+    Parser::new(program)
+        .map(|expr| match expr {
+            Ok(expr) => eval_expr(expr, &mut env).map_err(InterpreterError::Eval),
+            Err(e) => Err(InterpreterError::Parse(e)),
+        })
+        .collect::<Result<Vec<_>, _>>()?
+        .pop()
+        .ok_or(InterpreterError::Parse(ParseError::EndOfInput))
 }
 
 #[cfg(test)]
@@ -178,6 +251,31 @@ mod tests {
         assert_eq!(
             eval("(((lambda (x) (x)) (lambda () (lambda (x) x))) 1)"),
             Ok(Expression::Number(1)),
+        )
+    }
+
+    #[test]
+    fn fibonacci() {
+        assert_eq!(
+            eval(
+                "(define (fib n)
+                    (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))
+                 (fib 10)"
+            ),
+            Ok(Expression::Number(55))
+        )
+    }
+
+    #[test]
+    fn fast_fibonacci() {
+        assert_eq!(
+            eval(
+                "(define (calc-fib n a b)
+                    (if (= n 1) a (calc-fib (- n 1) b (+ a b))))
+                 (define (fib n) (calc-fib n 1 1))
+                 (fib 90)"
+            ),
+            Ok(Expression::Number(2880067194370816120))
         )
     }
 }

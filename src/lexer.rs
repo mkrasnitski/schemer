@@ -13,6 +13,7 @@ pub enum Token<'a> {
     Decimal(f64),
     StringLiteral(&'a str),
     Symbol(&'a str),
+    Operator(Operator),
 }
 
 impl<'a> Token<'a> {
@@ -34,6 +35,8 @@ impl<'a> Token<'a> {
                         Token::Number(n)
                     } else if let Ok(d) = word.parse() {
                         Token::Decimal(d)
+                    } else if let Some(op) = Operator::from_str(word) {
+                        Token::Operator(op)
                     } else {
                         Token::Symbol(word)
                     }
@@ -57,7 +60,61 @@ impl fmt::Display for Token<'_> {
             Token::Decimal(d) => write!(f, "{d}"),
             Token::StringLiteral(s) => write!(f, "{s}"),
             Token::Symbol(s) => write!(f, "{s}"),
+            Token::Operator(op) => write!(f, "{op}"),
         }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Operator {
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    Equal,
+    NotEqual,
+    Less,
+    LessOrEqual,
+    Greater,
+    GreaterOrEqual,
+}
+
+impl Operator {
+    fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "+" => Some(Operator::Plus),
+            "-" => Some(Operator::Minus),
+            "*" => Some(Operator::Star),
+            "/" => Some(Operator::Slash),
+            "=" => Some(Operator::Equal),
+            "!=" => Some(Operator::NotEqual),
+            "<" => Some(Operator::Less),
+            "<=" => Some(Operator::LessOrEqual),
+            ">" => Some(Operator::Greater),
+            ">=" => Some(Operator::GreaterOrEqual),
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for Operator {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Operator::Plus => "+",
+                Operator::Minus => "-",
+                Operator::Star => "*",
+                Operator::Slash => "/",
+                Operator::Equal => "=",
+                Operator::NotEqual => "!=",
+                Operator::Less => "<",
+                Operator::LessOrEqual => "<=",
+                Operator::Greater => ">",
+                Operator::GreaterOrEqual => ">=",
+            }
+        )
     }
 }
 
@@ -139,7 +196,7 @@ mod tests {
             tokenize("(+ 1 2)"),
             vec![
                 Token::OpenParen,
-                Token::Symbol("+"),
+                Token::Operator(Operator::Plus),
                 Token::Number(1),
                 Token::Number(2),
                 Token::CloseParen
@@ -153,7 +210,7 @@ mod tests {
             tokenize("(+ 1 2"),
             vec![
                 Token::OpenParen,
-                Token::Symbol("+"),
+                Token::Operator(Operator::Plus),
                 Token::Number(1),
                 Token::Number(2)
             ]
@@ -165,7 +222,7 @@ mod tests {
         assert_eq!(
             tokenize("+ 1 2)"),
             vec![
-                Token::Symbol("+"),
+                Token::Operator(Operator::Plus),
                 Token::Number(1),
                 Token::Number(2),
                 Token::CloseParen,
@@ -179,10 +236,10 @@ mod tests {
             tokenize("(+ 1 (+ 2 3))"),
             vec![
                 Token::OpenParen,
-                Token::Symbol("+"),
+                Token::Operator(Operator::Plus),
                 Token::Number(1),
                 Token::OpenParen,
-                Token::Symbol("+"),
+                Token::Operator(Operator::Plus),
                 Token::Number(2),
                 Token::Number(3),
                 Token::CloseParen,
@@ -197,7 +254,7 @@ mod tests {
             tokenize(r#"(+ "a" "b")"#),
             vec![
                 Token::OpenParen,
-                Token::Symbol("+"),
+                Token::Operator(Operator::Plus),
                 Token::DoubleQuote,
                 Token::StringLiteral("a"),
                 Token::DoubleQuote,
@@ -215,7 +272,7 @@ mod tests {
             tokenize(r#"(+ 1 "a)"#),
             vec![
                 Token::OpenParen,
-                Token::Symbol("+"),
+                Token::Operator(Operator::Plus),
                 Token::Number(1),
                 Token::DoubleQuote,
                 Token::StringLiteral("a)"),
@@ -229,7 +286,7 @@ mod tests {
             tokenize(r#"(+ "a + " "b + c")"#),
             vec![
                 Token::OpenParen,
-                Token::Symbol("+"),
+                Token::Operator(Operator::Plus),
                 Token::DoubleQuote,
                 Token::StringLiteral("a + "),
                 Token::DoubleQuote,
@@ -247,7 +304,7 @@ mod tests {
             tokenize(r#"(+ "" "a")"#),
             vec![
                 Token::OpenParen,
-                Token::Symbol("+"),
+                Token::Operator(Operator::Plus),
                 Token::DoubleQuote,
                 Token::DoubleQuote,
                 Token::DoubleQuote,
