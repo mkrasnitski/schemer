@@ -1,4 +1,5 @@
 use std::fmt;
+use std::str::FromStr;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Token<'a> {
@@ -29,11 +30,11 @@ impl<'a> Token<'a> {
                 "define" => Token::Define,
                 "if" => Token::If,
                 _ => {
-                    if let Ok(b) = word.parse() {
+                    if let Ok(b) = bool::from_str(word) {
                         Token::Bool(b)
-                    } else if let Ok(n) = word.parse() {
+                    } else if let Ok(n) = u64::from_str(word) {
                         Token::Number(n)
-                    } else if let Ok(d) = word.parse() {
+                    } else if let Ok(d) = f64::from_str(word) {
                         Token::Decimal(d)
                     } else if let Some(op) = Operator::from_str(word) {
                         Token::Operator(op)
@@ -58,7 +59,7 @@ impl fmt::Display for Token<'_> {
             Token::Bool(b) => write!(f, "{b}"),
             Token::Number(n) => write!(f, "{n}"),
             Token::Decimal(d) => write!(f, "{d}"),
-            Token::StringLiteral(s) => write!(f, "{s}"),
+            Token::StringLiteral(lit) => write!(f, "{lit}"),
             Token::Symbol(s) => write!(f, "{s}"),
             Token::Operator(op) => write!(f, "{op}"),
         }

@@ -44,7 +44,7 @@ impl fmt::Display for Expression<'_> {
             Expression::Bool(b) => write!(f, "{b}"),
             Expression::Number(n) => write!(f, "{n}"),
             Expression::Decimal(d) => write!(f, "{d}"),
-            Expression::StringLiteral(s) => write!(f, "{s:?}"),
+            Expression::StringLiteral(lit) => write!(f, "{lit:?}"),
             Expression::Symbol(s) => write!(f, "{s}"),
             Expression::Operator(op) => write!(f, "{op}"),
             Expression::Define { decl, body } => {
