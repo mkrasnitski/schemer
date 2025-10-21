@@ -59,6 +59,17 @@ impl<'a> Environment<'a> {
     pub fn insert(&mut self, var: &'a str, expr: Expression<'a>) {
         self.env.insert(var, expr);
     }
+
+    pub fn eval(&mut self, program: &'a str) -> InterpreterResult<'a> {
+        Parser::new(program)
+            .map(|expr| match expr {
+                Ok(expr) => eval_expr(expr, self).map_err(InterpreterError::Eval),
+                Err(e) => Err(InterpreterError::Parse(e)),
+            })
+            .collect::<Result<Vec<_>, _>>()?
+            .pop()
+            .ok_or(InterpreterError::Parse(ParseError::EndOfInput))
+    }
 }
 
 pub fn eval_expr<'a>(expr: Expression<'a>, env: &mut Environment<'a>) -> EvalResult<'a> {
@@ -173,21 +184,13 @@ impl EvalOperator for BinaryArgs<f64, f64> {
     }
 }
 
-pub fn eval(program: &str) -> InterpreterResult<'_> {
-    let mut env = Environment::default();
-    Parser::new(program)
-        .map(|expr| match expr {
-            Ok(expr) => eval_expr(expr, &mut env).map_err(InterpreterError::Eval),
-            Err(e) => Err(InterpreterError::Parse(e)),
-        })
-        .collect::<Result<Vec<_>, _>>()?
-        .pop()
-        .ok_or(InterpreterError::Parse(ParseError::EndOfInput))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn eval(program: &str) -> InterpreterResult<'_> {
+        Environment::default().eval(program)
+    }
 
     #[test]
     fn define_var() {

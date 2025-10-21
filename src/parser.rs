@@ -99,7 +99,6 @@ pub enum ParseError<'a> {
 
 impl fmt::Display for ParseError<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Error: ")?;
         match self {
             ParseError::EndOfInput => write!(f, "Unexpected end of input"),
             ParseError::UnexpectedToken(token) => write!(f, "Unexpected token: {token}"),
