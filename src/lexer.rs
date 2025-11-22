@@ -171,7 +171,7 @@ impl<'a> Iterator for TokenStream<'a> {
                 Some(token)
             }
         } else {
-            // If we're out of delimiters, consume the remainder of the string.
+            // If we're out of delimiters, consume the remainder of the input.
             let word = &self.input[self.start..];
             self.start = self.input.len();
             if word.is_empty() {

@@ -61,14 +61,15 @@ impl<'a> Environment<'a> {
     }
 
     pub fn eval(&mut self, program: &'a str) -> InterpreterResult<'a> {
-        Parser::new(program)
-            .map(|expr| match expr {
-                Ok(expr) => eval_expr(expr, self).map_err(InterpreterError::Eval),
-                Err(e) => Err(InterpreterError::Parse(e)),
-            })
-            .collect::<Result<Vec<_>, _>>()?
-            .pop()
+        let parsed = Parser::new(program)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(InterpreterError::Parse)?;
+        parsed
+            .into_iter()
+            .map(|e| eval_expr(e, self).map_err(InterpreterError::Eval))
+            .last()
             .ok_or(InterpreterError::Parse(ParseError::EndOfInput))
+            .flatten()
     }
 }
 
@@ -224,6 +225,14 @@ mod tests {
     }
 
     #[test]
+    fn if_int() {
+        assert_eq!(
+            eval("(if 1 2 3)"),
+            Err(InterpreterError::Eval(EvalError::InvalidCondition))
+        )
+    }
+
+    #[test]
     fn empty_lambda() {
         assert_eq!(eval("((lambda () 1))"), Ok(Expression::Number(1)))
     }
@@ -237,7 +246,7 @@ mod tests {
     fn not_enough_args() {
         assert_eq!(
             eval("((lambda (x y) (+ x y)) 1)"),
-            Err(InterpreterError::Eval(EvalError::NotEnoughArgs)),
+            Err(InterpreterError::Eval(EvalError::NotEnoughArgs))
         )
     }
 
@@ -245,7 +254,7 @@ mod tests {
     fn too_many_args() {
         assert_eq!(
             eval("((lambda (x y) (+ x y)) 1 2 3)"),
-            Err(InterpreterError::Eval(EvalError::TooManyArgs)),
+            Err(InterpreterError::Eval(EvalError::TooManyArgs))
         )
     }
 
@@ -253,7 +262,15 @@ mod tests {
     fn nested_lambdas() {
         assert_eq!(
             eval("(((lambda (x) (x)) (lambda () (lambda (x) x))) 1)"),
-            Ok(Expression::Number(1)),
+            Ok(Expression::Number(1))
+        )
+    }
+
+    #[test]
+    fn invalid_apply() {
+        assert_eq!(
+            eval("(1 2 3)"),
+            Err(InterpreterError::Eval(EvalError::InvalidApply))
         )
     }
 
@@ -279,6 +296,40 @@ mod tests {
                  (fib 90)"
             ),
             Ok(Expression::Number(2880067194370816120))
+        )
+    }
+
+    #[test]
+    fn add_int() {
+        assert_eq!(eval("(+ 1 1)"), Ok(Expression::Number(2)))
+    }
+
+    #[test]
+    fn add_decimal() {
+        assert_eq!(eval("(+ 1.0 1.0)"), Ok(Expression::Decimal(2.0)))
+    }
+
+    #[test]
+    fn add_not_enough_args() {
+        assert_eq!(
+            eval("(+ 1)"),
+            Err(InterpreterError::Eval(EvalError::NotEnoughArgs))
+        )
+    }
+
+    #[test]
+    fn add_too_many_args() {
+        assert_eq!(
+            eval("(+ 1 2 3)"),
+            Err(InterpreterError::Eval(EvalError::TooManyArgs))
+        )
+    }
+
+    #[test]
+    fn add_strings() {
+        assert_eq!(
+            eval(r#"(+ "a" "b")"#),
+            Err(InterpreterError::Eval(EvalError::InvalidArgs))
         )
     }
 }

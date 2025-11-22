@@ -123,6 +123,10 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn next_token(&mut self) -> Result<Token<'a>, ParseError<'a>> {
+        self.tokens.next().ok_or(ParseError::EndOfInput)
+    }
+
     fn parse_expression(&mut self) -> ParseResult<'a> {
         let token = self.next_token()?;
         match token {
@@ -136,42 +140,54 @@ impl<'a> Parser<'a> {
                 let literal = match self.next_token()? {
                     Token::StringLiteral(s) => match self.next_token()? {
                         Token::DoubleQuote => s,
-                        token => return Err(ParseError::UnexpectedToken(token)),
+                        _ => unreachable!(),
                     },
                     // Turn two consecutive double-quotes into an empty string literal.
                     Token::DoubleQuote => "",
-                    token => return Err(ParseError::UnexpectedToken(token)),
+                    _ => unreachable!(),
                 };
                 Ok(Expression::StringLiteral(literal))
             }
-            Token::OpenParen => self.parse_list(),
+            // String literals are surrounded by quotes, and it's impossible for the lexer to
+            // produce a bare literal.
+            Token::StringLiteral(_) => unreachable!(),
+            Token::OpenParen => {
+                let Some(token) = self.tokens.peek() else {
+                    return Err(ParseError::EndOfInput);
+                };
+
+                match token {
+                    Token::Lambda => self.parse_lambda(),
+                    Token::Define => self.parse_definition(),
+                    Token::If => self.parse_if(),
+                    Token::CloseParen => Err(ParseError::EmptyApply),
+                    _ => {
+                        let op = Box::new(self.parse_expression()?);
+                        Ok(Expression::Apply {
+                            op,
+                            args: self.parse_expression_list()?,
+                        })
+                    }
+                }
+            }
             // Closing parens need a matching open paren.
             Token::CloseParen => Err(ParseError::UnexpectedToken(token)),
-            // String literals are surrounded by quotes, so bare literals are invalid.
-            // Lambdas, definitions, and if statements are parsed inside `self.parse_list`
-            // and must be preceded by an open parentheses.
-            Token::StringLiteral(_) | Token::Lambda | Token::Define | Token::If => {
-                Err(ParseError::UnexpectedToken(token))
-            }
+            // Lambdas, definitions, and if statements are surrounded by parentheses and must
+            // appear immediately following the opening paren.
+            Token::Lambda | Token::Define | Token::If => Err(ParseError::UnexpectedToken(token)),
         }
     }
 
-    fn parse_list(&mut self) -> ParseResult<'a> {
-        let Some(token) = self.tokens.peek() else {
-            return Err(ParseError::EndOfInput);
-        };
-
-        match token {
-            Token::Lambda => self.parse_lambda(),
-            Token::Define => self.parse_definition(),
-            Token::If => self.parse_if(),
-            Token::CloseParen => Err(ParseError::EmptyApply),
-            _ => {
-                let op = Box::new(self.parse_expression()?);
-                Ok(Expression::Apply {
-                    op,
-                    args: self.consume_list()?,
-                })
+    fn parse_expression_list(&mut self) -> Result<Vec<Expression<'a>>, ParseError<'a>> {
+        let mut list = Vec::new();
+        loop {
+            match self.tokens.peek() {
+                Some(Token::CloseParen) => {
+                    self.tokens.next();
+                    return Ok(list);
+                }
+                Some(_) => list.push(self.parse_expression()?),
+                None => return Err(ParseError::EndOfInput),
             }
         }
     }
@@ -199,7 +215,7 @@ impl<'a> Parser<'a> {
         if let Token::Lambda = self.next_token()?
             && let Token::OpenParen = self.next_token()?
         {
-            let params = self.consume_symbol_list()?;
+            let params = self.parse_symbol_list()?;
             let body = Box::new(self.parse_expression()?);
 
             if let Token::CloseParen = self.next_token()? {
@@ -215,7 +231,7 @@ impl<'a> Parser<'a> {
             let decl = match self.next_token()? {
                 Token::Symbol(s) => Declaration::Variable(s),
                 Token::OpenParen => {
-                    let symbols = self.consume_symbol_list()?;
+                    let symbols = self.parse_symbol_list()?;
                     let Some((name, params)) = symbols.split_first() else {
                         return Err(ParseError::InvalidDefinition);
                     };
@@ -236,26 +252,8 @@ impl<'a> Parser<'a> {
         Err(ParseError::InvalidDefinition)
     }
 
-    fn next_token(&mut self) -> Result<Token<'a>, ParseError<'a>> {
-        self.tokens.next().ok_or(ParseError::EndOfInput)
-    }
-
-    fn consume_list(&mut self) -> Result<Vec<Expression<'a>>, ParseError<'a>> {
-        let mut list = Vec::new();
-        loop {
-            match self.tokens.peek() {
-                Some(Token::CloseParen) => {
-                    self.tokens.next();
-                    return Ok(list);
-                }
-                Some(_) => list.push(self.parse_expression()?),
-                None => return Err(ParseError::EndOfInput),
-            }
-        }
-    }
-
-    fn consume_symbol_list(&mut self) -> Result<Vec<&'a str>, ParseError<'a>> {
-        self.consume_list()?
+    fn parse_symbol_list(&mut self) -> Result<Vec<&'a str>, ParseError<'a>> {
+        self.parse_expression_list()?
             .into_iter()
             .map(|e| match e {
                 Expression::Symbol(s) => Some(s),
@@ -321,7 +319,7 @@ mod tests {
     fn unmatched_close_paren() {
         assert_eq!(
             parse("+ 1 2)"),
-            Err(ParseError::UnexpectedToken(Token::CloseParen)),
+            Err(ParseError::UnexpectedToken(Token::CloseParen))
         )
     }
 
@@ -404,6 +402,14 @@ mod tests {
     }
 
     #[test]
+    fn bare_lambda() {
+        assert_eq!(
+            parse("lambda"),
+            Err(ParseError::UnexpectedToken(Token::Lambda))
+        )
+    }
+
+    #[test]
     fn define_var() {
         assert_eq!(
             parse("(define a 5)"),
@@ -461,10 +467,28 @@ mod tests {
 
     #[test]
     fn ill_formed_define() {
+        assert_eq!(parse("(define 1 2)"), Err(ParseError::InvalidDefinition))
+    }
+
+    #[test]
+    fn ill_formed_define_var() {
         assert_eq!(
             parse("(define x 1 2 3)"),
-            Err(ParseError::InvalidDefinition),
+            Err(ParseError::InvalidDefinition)
         )
+    }
+
+    #[test]
+    fn ill_formed_define_proc() {
+        assert_eq!(
+            parse("(define (x 1) 2)"),
+            Err(ParseError::InvalidDefinition)
+        )
+    }
+
+    #[test]
+    fn ill_formed_define_empty_proc() {
+        assert_eq!(parse("(define () 1)"), Err(ParseError::InvalidDefinition))
     }
 
     #[test]
@@ -526,5 +550,10 @@ mod tests {
                 }
             ])
         )
+    }
+
+    #[test]
+    fn empty_apply() {
+        assert_eq!(parse("()"), Err(ParseError::EmptyApply))
     }
 }
